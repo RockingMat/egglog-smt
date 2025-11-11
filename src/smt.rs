@@ -7,6 +7,8 @@ use egglog::{
 };
 use egglog::{add_primitive, ast::Literal};
 use smtlib::backend::z3_binary::Z3Binary;
+use smtlib::funs::Fun;
+use smtlib::sorts::Sort;
 use smtlib::terms::StaticSorted;
 use smtlib::{Bool, Int, SatResult, Solver, Sorted, Storage};
 use std::{fmt::Debug, hash::Hash};
@@ -215,6 +217,116 @@ impl BaseSort for SMTInt {
         add_primitive!(
             eg,
             "smt-int-const" = |value: S| -> SMTIntValue { { SMTIntValue::Const(value.0) } }
+        );
+        // (smt-int 1)
+        add_primitive!(
+            eg,
+            "smt-int" = |value: i64| -> SMTIntValue { { SMTIntValue::Int64(value) } }
+        );
+        // (+ b1 b2)
+        add_primitive!(
+            eg,
+            "+" = |a: SMTIntValue, b: SMTIntValue| -> SMTIntValue {
+                SMTIntValue::Plus(Box::new(a), Box::new(b))
+            }
+        );
+        // (- b1 b2)
+        add_primitive!(
+            eg,
+            "-" = |a: SMTIntValue, b: SMTIntValue| -> SMTIntValue {
+                SMTIntValue::Minus(Box::new(a), Box::new(b))
+            }
+        );
+        // (* a b)
+        add_primitive!(
+            eg,
+            "*" = |a: SMTIntValue, b: SMTIntValue| -> SMTIntValue {
+                SMTIntValue::Mult(Box::new(a), Box::new(b))
+            }
+        );
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SMTUFIntValue {
+    Declaration(S, Vec<S>),
+}
+
+impl SMTUFIntValue {
+    pub fn to_uf<'s>(&self, st: &'s Storage) -> Int<'s> {
+        match self {
+            SMTUFIntValue::Declaration(name, types) => {
+                let sorts = types
+                    .iter()
+                    .map(|type_name| {
+                        if type_name.to_string() == "Int" {
+                            Sort::Static(Int)
+                        } else if type_name.to_string() == "Bool" {
+                            Sort::Bool
+                        }
+                    })
+                    .collect();
+                Fun::new(st, name.to_string(), sorts, Sort::Static(Int)).into()
+            }
+        }
+    }
+
+    pub fn to_term(&self, termdag: &mut TermDag) -> Term {
+        match self {
+            SMTIntValue::Const(name) => {
+                let arg = termdag.lit(Literal::String(name.clone()));
+                termdag.app("smt-int-const".into(), vec![arg])
+            }
+            SMTIntValue::Int64(value) => {
+                let arg = termdag.lit(Literal::Int(*value));
+                termdag.app("smt-int".into(), vec![arg])
+            }
+            SMTIntValue::Plus(a, b) => {
+                let a_term = a.to_term(termdag);
+                let b_term = b.to_term(termdag);
+                termdag.app("+".into(), vec![a_term, b_term])
+            }
+            SMTIntValue::Minus(a, b) => {
+                let a_term = a.to_term(termdag);
+                let b_term = b.to_term(termdag);
+                termdag.app("-".into(), vec![a_term, b_term])
+            }
+            SMTIntValue::Mult(a, b) => {
+                let a_term = a.to_term(termdag);
+                let b_term = b.to_term(termdag);
+                termdag.app("*".into(), vec![a_term, b_term])
+            }
+        }
+    }
+}
+
+impl BaseValue for SMTUFValue {}
+
+#[derive(Debug)]
+pub struct SMTUF;
+
+impl BaseSort for SMTUF {
+    type Base = SMTUFValue;
+
+    fn name(&self) -> &str {
+        "SMTUF"
+    }
+
+    fn reconstruct_termdag(
+        &self,
+        base_values: &BaseValues,
+        value: Value,
+        termdag: &mut TermDag,
+    ) -> Term {
+        let int = base_values.unwrap::<SMTUFValue>(value);
+        int.to_term(termdag)
+    }
+
+    fn register_primitives(&self, eg: &mut EGraph) {
+        // (smt-int-const "p")
+        add_primitive!(
+            eg,
+            "smt-fn-int" = |value: S| -> SMTIntValue { { SMTIntValue::Const(value.0) } }
         );
         // (smt-int 1)
         add_primitive!(
