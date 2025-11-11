@@ -249,7 +249,7 @@ impl BaseSort for SMTInt {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SMTUFIntValue {
-    Declaration(S, Vec<S>),
+    Declaration(String, Vec<String>),
 }
 
 impl SMTUFIntValue {
@@ -273,41 +273,27 @@ impl SMTUFIntValue {
         match self {
             SMTUFIntValue::Declaration(name, types) => {
                 let name = termdag.lit(Literal::String(name.clone()));
-                termdag.app("smt-uf-int".into(), vec![arg])
-            }
-            SMTIntValue::Int64(value) => {
-                let arg = termdag.lit(Literal::Int(*value));
-                termdag.app("smt-int".into(), vec![arg])
-            }
-            SMTIntValue::Plus(a, b) => {
-                let a_term = a.to_term(termdag);
-                let b_term = b.to_term(termdag);
-                termdag.app("+".into(), vec![a_term, b_term])
-            }
-            SMTIntValue::Minus(a, b) => {
-                let a_term = a.to_term(termdag);
-                let b_term = b.to_term(termdag);
-                termdag.app("-".into(), vec![a_term, b_term])
-            }
-            SMTIntValue::Mult(a, b) => {
-                let a_term = a.to_term(termdag);
-                let b_term = b.to_term(termdag);
-                termdag.app("*".into(), vec![a_term, b_term])
+                let mut children: Vec<Term> = types
+                    .iter()
+                    .map(|type_name| termdag.lit(Literal::String(type_name.clone())))
+                    .collect();
+                children.insert(0, name);
+                termdag.app("smt-uf-int".into(), children)
             }
         }
     }
 }
 
-impl BaseValue for SMTUFValue {}
+impl BaseValue for SMTUFIntValue {}
 
 #[derive(Debug)]
-pub struct SMTUF;
+pub struct SMTUFInt;
 
-impl BaseSort for SMTUF {
-    type Base = SMTUFValue;
+impl BaseSort for SMTUFInt {
+    type Base = SMTUFIntValue;
 
     fn name(&self) -> &str {
-        "SMTUF"
+        "SMTUFInt"
     }
 
     fn reconstruct_termdag(
@@ -316,7 +302,7 @@ impl BaseSort for SMTUF {
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let int = base_values.unwrap::<SMTUFValue>(value);
+        let int = base_values.unwrap::<SMTUFIntValue>(value);
         int.to_term(termdag)
     }
 
@@ -324,12 +310,12 @@ impl BaseSort for SMTUF {
         // (smt-int-const "p")
         add_primitive!(
             eg,
-            "smt-fn-int" = |value: S| -> SMTIntValue { { SMTIntValue::Const(value.0) } }
+            "smt-fn-int" = [args: S] -> SMTIntValue { { SMTIntValue::Const(value.0) } }
         );
         // (smt-int 1)
         add_primitive!(
             eg,
-            "smt-int" = |value: i64| -> SMTIntValue { { SMTIntValue::Int64(value) } }
+            "smt-call" = |value: i64| -> SMTIntValue { { SMTIntValue::Int64(value) } }
         );
         // (+ b1 b2)
         add_primitive!(
