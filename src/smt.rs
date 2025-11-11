@@ -275,36 +275,17 @@ impl SMTUFIntValue {
                 let name = termdag.lit(Literal::String(name.clone()));
                 termdag.app("smt-uf-int".into(), vec![arg])
             }
-            SMTIntValue::Int64(value) => {
-                let arg = termdag.lit(Literal::Int(*value));
-                termdag.app("smt-int".into(), vec![arg])
-            }
-            SMTIntValue::Plus(a, b) => {
-                let a_term = a.to_term(termdag);
-                let b_term = b.to_term(termdag);
-                termdag.app("+".into(), vec![a_term, b_term])
-            }
-            SMTIntValue::Minus(a, b) => {
-                let a_term = a.to_term(termdag);
-                let b_term = b.to_term(termdag);
-                termdag.app("-".into(), vec![a_term, b_term])
-            }
-            SMTIntValue::Mult(a, b) => {
-                let a_term = a.to_term(termdag);
-                let b_term = b.to_term(termdag);
-                termdag.app("*".into(), vec![a_term, b_term])
-            }
         }
     }
 }
 
-impl BaseValue for SMTUFValue {}
+impl BaseValue for SMTUFIntValue {}
 
 #[derive(Debug)]
 pub struct SMTUF;
 
 impl BaseSort for SMTUF {
-    type Base = SMTUFValue;
+    type Base = SMTUFIntValue;
 
     fn name(&self) -> &str {
         "SMTUF"
@@ -316,41 +297,25 @@ impl BaseSort for SMTUF {
         value: Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let int = base_values.unwrap::<SMTUFValue>(value);
-        int.to_term(termdag)
+        let uf = base_values.unwrap::<SMTUFIntValue>(value);
+        uf.to_term(termdag)
     }
 
     fn register_primitives(&self, eg: &mut EGraph) {
-        // (smt-int-const "p")
+        // (smt-uf-int "f" "Int" "Int")
         add_primitive!(
             eg,
-            "smt-fn-int" = |value: S| -> SMTIntValue { { SMTIntValue::Const(value.0) } }
+            "smt-fn-int" = [args: S] -> SMTUFIntValue { {
+                let mut args_iter = args.into_iter();
+                let name = args_iter.next().unwrap();
+                let types: Vec<S> = args_iter.collect();
+                SMTUFIntValue::Declaration(name, types)
+            } }
         );
-        // (smt-int 1)
+        // (smt-call 1)
         add_primitive!(
             eg,
-            "smt-int" = |value: i64| -> SMTIntValue { { SMTIntValue::Int64(value) } }
-        );
-        // (+ b1 b2)
-        add_primitive!(
-            eg,
-            "+" = |a: SMTIntValue, b: SMTIntValue| -> SMTIntValue {
-                SMTIntValue::Plus(Box::new(a), Box::new(b))
-            }
-        );
-        // (- b1 b2)
-        add_primitive!(
-            eg,
-            "-" = |a: SMTIntValue, b: SMTIntValue| -> SMTIntValue {
-                SMTIntValue::Minus(Box::new(a), Box::new(b))
-            }
-        );
-        // (* a b)
-        add_primitive!(
-            eg,
-            "*" = |a: SMTIntValue, b: SMTIntValue| -> SMTIntValue {
-                SMTIntValue::Mult(Box::new(a), Box::new(b))
-            }
+            "smt-call" = |value: i64| -> SMTIntValue { { SMTIntValue::Int64(value) } }
         );
     }
 }
