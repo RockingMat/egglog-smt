@@ -253,29 +253,27 @@ pub enum SMTUFIntValue {
 }
 
 impl SMTUFIntValue {
-    pub fn to_uf<'s>(&self, st: &'s Storage) -> Int<'s> {
+    pub fn to_uf<'s>(&self, st: &'s Storage) -> Fun<'s> {
         match self {
             SMTUFIntValue::Declaration(name, types) => {
-                let sorts = types
+                let sorts: Result<Vec<Sort>, String> = types
                     .iter()
-                    .map(|type_name| {
-                        if type_name.to_string() == "Int" {
-                            Sort::Static(Int)
-                        } else if type_name.to_string() == "Bool" {
-                            Sort::Bool
-                        }
+                    .map(|type_name| match type_name.as_str() {
+                        "Int" => Ok(Int::sort()),
+                        "Bool" => Ok(Bool::sort()),
+                        other => Err(format!("unknown type {other}")),
                     })
                     .collect();
-                Fun::new(st, name.to_string(), sorts, Sort::Static(Int)).into()
+                Fun::new(st, name.to_string(), sorts.unwrap(), Int::sort())
             }
         }
     }
 
     pub fn to_term(&self, termdag: &mut TermDag) -> Term {
         match self {
-            SMTIntValue::Const(name) => {
-                let arg = termdag.lit(Literal::String(name.clone()));
-                termdag.app("smt-int-const".into(), vec![arg])
+            SMTUFIntValue::Declaration(name, types) => {
+                let name = termdag.lit(Literal::String(name.clone()));
+                termdag.app("smt-uf-int".into(), vec![arg])
             }
             SMTIntValue::Int64(value) => {
                 let arg = termdag.lit(Literal::Int(*value));
