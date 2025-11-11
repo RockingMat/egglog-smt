@@ -249,7 +249,7 @@ impl BaseSort for SMTInt {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SMTUFIntValue {
-    Declaration(S, Vec<S>),
+    Declaration(String, Vec<String>),
 }
 
 impl SMTUFIntValue {
@@ -273,7 +273,12 @@ impl SMTUFIntValue {
         match self {
             SMTUFIntValue::Declaration(name, types) => {
                 let name = termdag.lit(Literal::String(name.clone()));
-                termdag.app("smt-uf-int".into(), vec![arg])
+                let mut children: Vec<Term> = types
+                    .iter()
+                    .map(|type_name| termdag.lit(Literal::String(type_name.clone())))
+                    .collect();
+                children.insert(0, name);
+                termdag.app("smt-uf-int".into(), children)
             }
         }
     }
@@ -282,13 +287,12 @@ impl SMTUFIntValue {
 impl BaseValue for SMTUFIntValue {}
 
 #[derive(Debug)]
-pub struct SMTUF;
-
-impl BaseSort for SMTUF {
+pub struct SMTUFInt;
+impl BaseSort for SMTUFIntValue {
     type Base = SMTUFIntValue;
 
     fn name(&self) -> &str {
-        "SMTUF"
+        "SMTUFInt"
     }
 
     fn reconstruct_termdag(
@@ -305,10 +309,10 @@ impl BaseSort for SMTUF {
         // (smt-uf-int "f" "Int" "Int")
         add_primitive!(
             eg,
-            "smt-fn-int" = [args: S] -> SMTUFIntValue { {
+            "smt-fn-int" = [args: String] -> SMTUFIntValue { {
                 let mut args_iter = args.into_iter();
                 let name = args_iter.next().unwrap();
-                let types: Vec<S> = args_iter.collect();
+                let types: Vec<String> = args_iter.collect();
                 SMTUFIntValue::Declaration(name, types)
             } }
         );

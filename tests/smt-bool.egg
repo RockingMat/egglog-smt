@@ -13,4 +13,11 @@
 
 
 (let x (smt-fn-int "x" "Int"))
-(let y (smt-call x (smt-int 1)))
+(let t (smt-fn-int "t" "Int"))
+(let y (smt-fn-int "y" "Int"))
+
+(let cond1 (smt-= (smt-call x (smt-int 0)) (smt-call t (smt-int 0))))
+(let cond2 (smt-= (smt-call y (smt-int 1)) (smt-call t (smt-int 0))))
+(let cond3 (smt-= (smt-call x (smt-int 1)) (smt-call y (smt-int 1))))
+
+(fail (check (unsat cond1 cond2 cond3)))
