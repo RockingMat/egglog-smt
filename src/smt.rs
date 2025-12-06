@@ -582,6 +582,8 @@ impl BaseSort for SMTSolved {
                             constants.bool(b);
                         }
                         let mut values = vec![];
+                        let mut extraction_failed = false;
+
                         for name in constants.bools {
                             let Some(term) = model.eval(Bool::new_const(&st, &name)) else {
                                 continue;
@@ -591,21 +593,40 @@ impl BaseSort for SMTSolved {
                             };
                             values.push(SMTValueValue(name, SMTTerm::Bool(s.parse().unwrap())));
                         }
-                        for name in constants.ints {
-                            let Some(term) = model.eval(Int::new_const(&st, &name)) else {
-                                continue;
-                            };
-                            let int_value = extract_int_value(term.term());
-                            values.push(SMTValueValue(name, SMTTerm::Int(int_value)));
+
+                        if !extraction_failed {
+                            for name in constants.ints {
+                                let Some(term) = model.eval(Int::new_const(&st, &name)) else {
+                                    continue;
+                                };
+                                if let Some(int_value) = extract_int_value(term.term()) {
+                                    values.push(SMTValueValue(name, SMTTerm::Int(int_value)));
+                                } else {
+                                    extraction_failed = true;
+                                    break;
+                                }
+                            }
                         }
-                        for name in constants.reals {
-                            let Some(term) = model.eval(Real::new_const(&st, &name)) else {
-                                continue;
-                            };
-                            let real_value = extract_real_value(term.term());
-                            values.push(SMTValueValue(name, SMTTerm::Real(OrderedFloat(real_value))));
+
+                        if !extraction_failed {
+                            for name in constants.reals {
+                                let Some(term) = model.eval(Real::new_const(&st, &name)) else {
+                                    continue;
+                                };
+                                if let Some(real_value) = extract_real_value(term.term()) {
+                                    values.push(SMTValueValue(name, SMTTerm::Real(OrderedFloat(real_value))));
+                                } else {
+                                    extraction_failed = true;
+                                    break;
+                                }
+                            }
                         }
-                        SMTSolvedValue::Sat(values)
+
+                        if extraction_failed {
+                            SMTSolvedValue::Unknown
+                        } else {
+                            SMTSolvedValue::Sat(values)
+                        }
                     }
                     SatResultWithModel::Unsat => SMTSolvedValue::Unsat,
                     SatResultWithModel::Unknown => SMTSolvedValue::Unknown,
@@ -855,12 +876,12 @@ impl TypeConstraint for SMTUFTypeConstraint {
     }
 }
 
-fn extract_int_value(term: &smtlib_lowlevel::ast::Term) -> i64 {
+fn extract_int_value(term: &smtlib_lowlevel::ast::Term) -> Option<i64> {
     match term {
         // Positive numeral: 42
         smtlib_lowlevel::ast::Term::SpecConstant(smtlib_lowlevel::ast::SpecConstant::Numeral(
             n,
-        )) => n.into_u128().unwrap() as i64,
+        )) => Some(n.into_u128().unwrap() as i64),
         // Negative numbers: (- 42)
         smtlib_lowlevel::ast::Term::Application(identifier, arguments) => {
             if let smtlib_lowlevel::ast::QualIdentifier::Identifier(
@@ -868,27 +889,31 @@ fn extract_int_value(term: &smtlib_lowlevel::ast::Term) -> i64 {
             ) = identifier
             {
                 if *op == "-" && arguments.len() == 1 {
-                    return -extract_int_value(arguments[0]);
+                    return extract_int_value(arguments[0]).map(|v| -v);
                 }
             }
-            panic!(
+            eprintln!(
                 "Unsupported int application format: identifier={identifier:?}, arguments={arguments:?}",
             );
+            None
         }
-        _ => panic!("Unsupported int term format: {term:?}"),
+        _ => {
+            eprintln!("Unsupported int term format: {term:?}");
+            None
+        }
     }
 }
 
-fn extract_real_value(term: &smtlib_lowlevel::ast::Term) -> f64 {
+fn extract_real_value(term: &smtlib_lowlevel::ast::Term) -> Option<f64> {
     match term {
         // Positive decimal: 1.5
         smtlib_lowlevel::ast::Term::SpecConstant(smtlib_lowlevel::ast::SpecConstant::Decimal(
             d,
-        )) => d.0.parse::<f64>().unwrap(),
+        )) => Some(d.0.parse::<f64>().unwrap()),
         // Positive numeral: 42
         smtlib_lowlevel::ast::Term::SpecConstant(smtlib_lowlevel::ast::SpecConstant::Numeral(
             n,
-        )) => n.into_u128().unwrap() as f64,
+        )) => Some(n.into_u128().unwrap() as f64),
         // Negative numbers: (- 1.5) or (- 42)
         smtlib_lowlevel::ast::Term::Application(identifier, arguments) => {
             if let smtlib_lowlevel::ast::QualIdentifier::Identifier(
@@ -896,7 +921,7 @@ fn extract_real_value(term: &smtlib_lowlevel::ast::Term) -> f64 {
             ) = identifier
             {
                 if *op == "-" && arguments.len() == 1 {
-                    return -extract_real_value(arguments[0]);
+                    return extract_real_value(arguments[0]).map(|v| -v);
                 }
             }
             // Rational numbers: (/ 1 3) represents 1/3
@@ -905,16 +930,20 @@ fn extract_real_value(term: &smtlib_lowlevel::ast::Term) -> f64 {
             ) = identifier
             {
                 if *op == "/" && arguments.len() == 2 {
-                    let numerator = extract_real_value(arguments[0]);
-                    let denominator = extract_real_value(arguments[1]);
-                    return numerator / denominator;
+                    let numerator = extract_real_value(arguments[0])?;
+                    let denominator = extract_real_value(arguments[1])?;
+                    return Some(numerator / denominator);
                 }
             }
-            panic!(
+            eprintln!(
                 "Unsupported real application format: identifier={identifier:?}, arguments={arguments:?}",
             );
+            None
         }
-        _ => panic!("Unsupported real term format: {term:?}",),
+        _ => {
+            eprintln!("Unsupported real term format: {term:?}");
+            None
+        }
     }
 }
 
