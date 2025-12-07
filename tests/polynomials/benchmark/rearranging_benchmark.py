@@ -6,9 +6,9 @@ import os
 import matplotlib.pyplot as plt
 from typing import Tuple
 import sympy as sp
-from sympy import symbols, expand
+from sympy import symbols
 
-def generate_expanded_polynomial(target_terms: int) -> Tuple[sp.Expr, sp.Expr, int]:
+def generate_expanded_polynomial(target_terms: int) -> Tuple[list[sp.Expr], list[sp.Expr], int]:
     """Generate an expanded polynomial and a rearranged version using SymPy."""
     v, w, x, y, z = symbols('v w x y z')
     variables = [v, w, x, y, z]
@@ -36,9 +36,12 @@ def generate_expanded_polynomial(target_terms: int) -> Tuple[sp.Expr, sp.Expr, i
     
     # Create rearranged version by shuffling terms
     if expanded.is_Add:
+        print(expanded.args)
         shuffled_terms = list(expanded.args)
         random.shuffle(shuffled_terms)
+        print(shuffled_terms)
         rearranged = sum(shuffled_terms)
+        print(rearranged)
         actual_terms = len(expanded.args)
     else:
         rearranged = expanded
@@ -60,11 +63,28 @@ def sympy_to_egglog(expr: sp.Expr) -> str:
             else:
                 return f"(Coefficient {int(e)}.0 (One))"
         elif e.is_Add:
+            def convert_addition(args: list[str]) -> str:
+                if len(args) == 0:
+                    return ""
+                if len(args) == 1:
+                    return args[0]
+                elif len(args) == 2:
+                    return f"(Add {args[0]} {args[1]})"
+                else:
+                    split = random.randint(1, len(args) - 2)
+                    random.shuffle(args)
+                    left = convert_addition(args[:split])
+                    right = convert_addition(args[split:])
+                    return f"(Add {left} {right})"
             args = [convert_expr(arg) for arg in e.args]
-            result = args[0]
-            for arg in args[1:]:
-                result = f"(Add {result} {arg})"
-            return result
+            return convert_addition(args)
+            # first_args = convert_expr(e.args[0:split])
+            # second_args = convert_expr(e.args[split:])
+            # return f"(Add {first_args} {second_args})"
+            # result = args[0]
+            # for arg in args[1:]:
+            #     result = f"(Add {result} {arg})"
+            # return result
         elif e.is_Mul:
             # Separate coefficient from the rest
             coeff = 1
@@ -123,8 +143,9 @@ def create_egglog_test(expanded_egglog: str, rearranged_egglog: str, test_type: 
 (let e2 {rearranged_egglog})
 {use_smt}
 
-(run-schedule (saturate (run)))
+(run-schedule (saturate (run :until (= e1 e2))))
 (check (= e1 e2))
+(print-size)
 """
 
 def run_benchmark(test_file: str, timeout: int = 120) -> Tuple[float, str]:
@@ -136,6 +157,7 @@ def run_benchmark(test_file: str, timeout: int = 120) -> Tuple[float, str]:
         result = subprocess.run([binary_path, test_file], 
                               capture_output=True, text=True, timeout=timeout)
         end_time = time.time()
+        print(result.stdout)
         
         if result.returncode != 0:
             print(f"Error running {test_file}: {result.stderr}")
@@ -148,7 +170,8 @@ def run_benchmark(test_file: str, timeout: int = 120) -> Tuple[float, str]:
 
 def main():
     # Test parameters
-    term_counts = [3, 5, 8, 12, 16, 20, 25, 30]
+    term_counts = list(range(3, 28, 3))
+    timeout = 1000
     results = {"basic_times": [], "smt_times": [], "basic_status": [], "smt_status": [], "terms": []}
     
     os.makedirs("temp_tests", exist_ok=True)
@@ -174,7 +197,7 @@ def main():
         with open(basic_file, 'w') as f:
             f.write(basic_test)
         
-        basic_time, basic_status = run_benchmark(basic_file, timeout=30)
+        basic_time, basic_status = run_benchmark(basic_file, timeout=timeout)
         
         # Test SMT rules  
         smt_test = create_egglog_test(expanded_egglog, rearranged_egglog, "smt")
@@ -183,7 +206,7 @@ def main():
         with open(smt_file, 'w') as f:
             f.write(smt_test)
             
-        smt_time, smt_status = run_benchmark(smt_file, timeout=30)
+        smt_time, smt_status = run_benchmark(smt_file, timeout=timeout)
         
         # Store all results
         results["terms"].append(actual_terms)
