@@ -24,6 +24,17 @@ pub enum SMTBitVecValue {
 }
 
 impl SMTBitVecValue {
+    /// Get the size of the AST rooted at this bitvector value
+    pub fn ast_size(&self) -> usize {
+        match self {
+            SMTBitVecValue::Const(_, _) | SMTBitVecValue::Literal(_, _) => 1,
+            SMTBitVecValue::BvAdd(a, b)
+            | SMTBitVecValue::BvXor(a, b)
+            | SMTBitVecValue::BvAnd(a, b) => 1 + a.ast_size() + b.ast_size(),
+            SMTBitVecValue::BvNot(a) => 1 + a.ast_size(),
+        }
+    }
+
     /// Get the bit width of this bitvector
     pub fn width(&self) -> u32 {
         match self {

@@ -1,5 +1,6 @@
 use crate::smt_bitvec::{SMTBitVec, SMTBitVecValue};
 use crate::smt_real::{SMTReal, SMTRealValue};
+use crate::{SMTUFReal, SMTUFRealValue};
 use egglog::constraint::{self, Constraint, TypeConstraint};
 use egglog::sort::{BaseValues, Boxed, F, OrderedFloat, S};
 use egglog::{ArcSort, AtomTerm, ExecutionState, Primitive, TypeInfo};
@@ -12,15 +13,17 @@ use egglog::{add_primitive, ast::Literal};
 use smtlib::backend::z3_binary::Z3Binary;
 use smtlib::funs::Fun;
 use smtlib::sorts::Sort;
-use smtlib::terms::StaticSorted;
-use smtlib::{Bool, Int, Real, SatResultWithModel, Solver, Sorted, Storage};
+use smtlib::terms::{StaticSorted, exists};
+use smtlib::{Bool, Int, Logger, Real, SatResultWithModel, Solver, Sorted, Storage};
 use smtlib_lowlevel::lexicon::Symbol;
 use std::any::TypeId;
 use std::collections::BTreeSet;
+use std::env;
 use std::{fmt::Debug, hash::Hash};
 
 pub fn add_smt(egraph: &mut EGraph) {
     // important to add ints as base sort before bools bc bools reference ints
+    add_base_sort(egraph, SMTUFReal, span!()).unwrap();
     add_base_sort(egraph, SMTUFInt, span!()).unwrap();
     add_base_sort(egraph, SMTInt, span!()).unwrap();
     add_base_sort(egraph, SMTReal, span!()).unwrap();
@@ -45,9 +48,26 @@ pub enum SMTBoolValue {
     // Bitvector comparisons
     BvEq(Box<SMTBitVecValue>, Box<SMTBitVecValue>),
     BvSlt(Box<SMTBitVecValue>, Box<SMTBitVecValue>),
+    RealExists(String, Box<SMTBoolValue>),
 }
 
 impl SMTBoolValue {
+    pub fn ast_size(&self) -> usize {
+        match self {
+            SMTBoolValue::Const(_) => 1,
+            SMTBoolValue::Or(a, b) | SMTBoolValue::And(a, b) => 1 + a.ast_size() + b.ast_size(),
+            SMTBoolValue::Not(a) => 1 + a.ast_size(),
+            SMTBoolValue::IntEq(a, b) => 1 + a.ast_size() + b.ast_size(),
+            SMTBoolValue::RealEq(a, b)
+            | SMTBoolValue::RealLt(a, b)
+            | SMTBoolValue::RealLte(a, b)
+            | SMTBoolValue::RealGte(a, b)
+            | SMTBoolValue::RealGt(a, b) => 1 + a.ast_size() + b.ast_size(),
+            SMTBoolValue::BvSlt(a, b) | SMTBoolValue::BvEq(a, b) => 1 + a.ast_size() + b.ast_size(),
+            SMTBoolValue::RealExists(_, body) => 1 + body.ast_size(),
+        }
+    }
+
     pub fn to_bool<'s>(&self, st: &'s Storage, solver: &mut Solver<'s, Z3Binary>) -> Bool<'s> {
         match self {
             SMTBoolValue::Const(name) => Bool::new_const(st, name).into(),
@@ -63,6 +83,9 @@ impl SMTBoolValue {
             // Bitvector comparisons
             SMTBoolValue::BvEq(a, b) => a.to_bool_cmp(st, "=", b),
             SMTBoolValue::BvSlt(a, b) => a.to_bool_cmp(st, "bvslt", b),
+            SMTBoolValue::RealExists(var_name, body) => {
+                exists(st, Real::new_const(st, var_name), body.to_bool(st, solver))
+            }
         }
     }
 
@@ -94,7 +117,7 @@ impl SMTBoolValue {
             SMTBoolValue::RealEq(a, b) => {
                 let a_term = a.to_term(termdag);
                 let b_term = b.to_term(termdag);
-                termdag.app("smt-real-=".into(), vec![a_term, b_term])
+                termdag.app("smt-=".into(), vec![a_term, b_term])
             }
             SMTBoolValue::RealLt(a, b) => {
                 let a_term = a.to_term(termdag);
@@ -126,6 +149,12 @@ impl SMTBoolValue {
                 let a_term = a.to_term(termdag);
                 let b_term = b.to_term(termdag);
                 termdag.app("smt-bv-slt".into(), vec![a_term, b_term])
+            }
+            SMTBoolValue::RealExists(var_name, body) => {
+                let var = SMTRealValue::Const(var_name.clone());
+                let body_term = body.to_term(termdag);
+                let var_term = var.to_term(termdag);
+                termdag.app("smt-exists".into(), vec![var_term, body_term])
             }
         }
     }
@@ -185,10 +214,10 @@ impl BaseSort for SMTBool {
                 SMTBoolValue::IntEq(Box::new(a), Box::new(b))
             }
         );
-        // (smt-real-= a b)
+        // (smt-= a b)
         add_primitive!(
             eg,
-            "smt-real-=" = |a: SMTRealValue, b: SMTRealValue| -> SMTBoolValue {
+            "smt-=" = |a: SMTRealValue, b: SMTRealValue| -> SMTBoolValue {
                 SMTBoolValue::RealEq(Box::new(a), Box::new(b))
             }
         );
@@ -234,6 +263,20 @@ impl BaseSort for SMTBool {
                 SMTBoolValue::BvSlt(Box::new(a), Box::new(b))
             }
         );
+        // Not working for now
+        // (smt-exists <smt-real-const> <smt-real-bool>)
+        // e.g. (smt-exists (smt-real-const "x") (smt-= (smt-real-const "x") (smt-real 0.0))
+        // add_primitive!(
+        //     eg,
+        //     "smt-exists" = |var: SMTRealValue, body: SMTBoolValue| -> SMTBoolValue {
+        //         {
+        //             let SMTRealValue::Const(name) = var else {
+        //                 panic!("smt-exists first argument must be smt-real-const");
+        //             };
+        //             SMTBoolValue::RealExists(name, Box::new(body))
+        //         }
+        //     }
+        // );
     }
 }
 
@@ -248,6 +291,18 @@ pub enum SMTIntValue {
 }
 
 impl SMTIntValue {
+    pub fn ast_size(&self) -> usize {
+        match self {
+            SMTIntValue::Const(_) | SMTIntValue::Int64(_) => 1,
+            SMTIntValue::Plus(a, b) | SMTIntValue::Minus(a, b) | SMTIntValue::Mult(a, b) => {
+                1 + a.ast_size() + b.ast_size()
+            }
+            SMTIntValue::FuncApplication(_, args) => {
+                1 + args.iter().map(|arg| arg.ast_size()).sum::<usize>()
+            }
+        }
+    }
+
     pub fn to_int<'s>(&self, st: &'s Storage, solver: &mut Solver<'s, Z3Binary>) -> Int<'s> {
         match self {
             SMTIntValue::Const(name) => Int::new_const(st, name).into(),
@@ -570,12 +625,13 @@ impl BaseSort for SMTSolved {
             "smt-solve" = [asserts: SMTBoolValue] -> SMTSolvedValue { {
                 let st = Storage::new();
                 let mut solver = Solver::new(&st, Z3Binary::new("z3").unwrap()).unwrap();
+                solver.set_logger(SMTLogger);
                 for b in asserts.clone() {
                     let smt_bool = b.to_bool(&st, &mut solver);
                     solver.assert(smt_bool).unwrap();
 
                 }
-                match solver.check_sat_with_model().unwrap() {
+                let res = match solver.check_sat_with_model().unwrap() {
                     SatResultWithModel::Sat(model) => {
                         let mut constants = Constants::default();
                         for b in asserts {
@@ -630,7 +686,12 @@ impl BaseSort for SMTSolved {
                     }
                     SatResultWithModel::Unsat => SMTSolvedValue::Unsat,
                     SatResultWithModel::Unknown => SMTSolvedValue::Unknown,
+                };
+                if env::var("SMT_DEBUG").is_ok() {
+                    // Print out a newline to separate SMT solver calls
+                    println!();
                 }
+                res
             }}
         );
         // (smt-call f arg1 arg2 ...)
@@ -647,6 +708,22 @@ impl BaseSort for SMTSolved {
                 .clone(),
             fun_sort: eg
                 .get_arcsort_by(|s| s.value_type() == Some(TypeId::of::<SMTUFIntValue>()))
+                .clone(),
+        });
+        // (smt-call f arg1 arg2 ...)
+        eg.add_primitive(UFApply {
+            args: eg
+                .get_arcsorts_by(|s| {
+                    s.value_type() == Some(TypeId::of::<SMTIntValue>())
+                        || s.value_type() == Some(TypeId::of::<SMTBoolValue>())
+                        || s.value_type() == Some(TypeId::of::<SMTRealValue>())
+                })
+                .clone(),
+            out_sort: eg
+                .get_arcsort_by(|s| s.value_type() == Some(TypeId::of::<SMTRealValue>()))
+                .clone(),
+            fun_sort: eg
+                .get_arcsort_by(|s| s.value_type() == Some(TypeId::of::<SMTUFRealValue>()))
                 .clone(),
         });
     }
@@ -666,6 +743,7 @@ impl SMTUFIntValue {
                     .map(|type_name| match type_name.as_str() {
                         "Int" => Ok(Int::sort()),
                         "Bool" => Ok(Bool::sort()),
+                        "Real" => Ok(Real::sort()),
                         other => Err(format!("unknown type {other}")),
                     })
                     .collect();
@@ -701,6 +779,14 @@ pub enum SMTBaseValue {
 impl BaseValue for SMTBaseValue {}
 
 impl SMTBaseValue {
+    pub fn ast_size(&self) -> usize {
+        match self {
+            SMTBaseValue::BoolValue(arg) => arg.ast_size(),
+            SMTBaseValue::IntValue(arg) => arg.ast_size(),
+            SMTBaseValue::RealValue(arg) => arg.ast_size(),
+        }
+    }
+
     pub fn to_term(&self, termdag: &mut TermDag) -> Term {
         match self {
             SMTBaseValue::BoolValue(arg) => arg.to_term(termdag),
@@ -762,38 +848,71 @@ impl Primitive for UFApply {
     }
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let (fun_val, args) = args.split_first().unwrap();
-        let fun = exec_state.base_values().unwrap::<SMTUFIntValue>(*fun_val);
-        let arg_vals: Vec<SMTBaseValue> = match fun.clone() {
-            SMTUFIntValue::Declaration(name, arg_types) => {
-                assert!(
-                    arg_types.len() == args.len(),
-                    "Expected function {} to be called with {} args, but got {}",
-                    name,
-                    arg_types.len(),
-                    args.len()
-                );
-                arg_types
-                    .iter()
-                    .zip(args)
-                    .map(|(arg_type, arg)| match arg_type.as_str() {
-                        "Int" => {
-                            let int_val = exec_state.base_values().unwrap::<SMTIntValue>(*arg);
-                            SMTBaseValue::IntValue(int_val)
-                        }
-                        "Bool" => SMTBaseValue::BoolValue(
-                            exec_state.base_values().unwrap::<SMTBoolValue>(*arg),
-                        ),
-                        "Real" => SMTBaseValue::RealValue(
-                            exec_state.base_values().unwrap::<SMTRealValue>(*arg),
-                        ),
-                        other => panic!("unknown type {other}"),
-                    })
-                    .collect::<Vec<SMTBaseValue>>()
+        if self.out_sort.name() == "SMTInt" {
+            let fun = exec_state.base_values().unwrap::<SMTUFIntValue>(*fun_val);
+            match fun.clone() {
+                SMTUFIntValue::Declaration(name, arg_types) => {
+                    assert!(
+                        arg_types.len() == args.len(),
+                        "Expected function {} to be called with {} args, but got {}",
+                        name,
+                        arg_types.len(),
+                        args.len()
+                    );
+                    let arg_vals = arg_types
+                        .iter()
+                        .zip(args)
+                        .map(|(arg_type, arg)| match arg_type.as_str() {
+                            "Int" => {
+                                let int_val = exec_state.base_values().unwrap::<SMTIntValue>(*arg);
+                                SMTBaseValue::IntValue(int_val)
+                            }
+                            "Bool" => SMTBaseValue::BoolValue(
+                                exec_state.base_values().unwrap::<SMTBoolValue>(*arg),
+                            ),
+                            "Real" => SMTBaseValue::RealValue(
+                                exec_state.base_values().unwrap::<SMTRealValue>(*arg),
+                            ),
+                            other => panic!("unknown type {other}"),
+                        })
+                        .collect::<Vec<SMTBaseValue>>();
+                    let fun_app: SMTIntValue = { SMTIntValue::FuncApplication(fun, arg_vals) };
+                    Some(exec_state.base_values().get::<SMTIntValue>(fun_app))
+                }
             }
-        };
-
-        let fun_app: SMTIntValue = { SMTIntValue::FuncApplication(fun, arg_vals) };
-        Some(exec_state.base_values().get::<SMTIntValue>(fun_app))
+        } else {
+            let fun = exec_state.base_values().unwrap::<SMTUFRealValue>(*fun_val);
+            match fun.clone() {
+                SMTUFRealValue::Declaration(name, arg_types) => {
+                    assert!(
+                        arg_types.len() == args.len(),
+                        "Expected function {} to be called with {} args, but got {}",
+                        name,
+                        arg_types.len(),
+                        args.len()
+                    );
+                    let arg_vals = arg_types
+                        .iter()
+                        .zip(args)
+                        .map(|(arg_type, arg)| match arg_type.as_str() {
+                            "Int" => {
+                                let int_val = exec_state.base_values().unwrap::<SMTIntValue>(*arg);
+                                SMTBaseValue::IntValue(int_val)
+                            }
+                            "Bool" => SMTBaseValue::BoolValue(
+                                exec_state.base_values().unwrap::<SMTBoolValue>(*arg),
+                            ),
+                            "Real" => SMTBaseValue::RealValue(
+                                exec_state.base_values().unwrap::<SMTRealValue>(*arg),
+                            ),
+                            other => panic!("unknown type {other}"),
+                        })
+                        .collect::<Vec<SMTBaseValue>>();
+                    let fun_app = { SMTRealValue::FuncApplication(fun, arg_vals) };
+                    Some(exec_state.base_values().get::<SMTRealValue>(fun_app))
+                }
+            }
+        }
     }
 }
 
@@ -990,6 +1109,9 @@ impl Constants {
                 self.bitvec(*a);
                 self.bitvec(*b);
             }
+            SMTBoolValue::RealExists(_, body) => {
+                self.bool(*body);
+            }
         }
     }
 
@@ -1038,6 +1160,15 @@ impl Constants {
             SMTRealValue::Neg(a) => {
                 self.real(*a);
             }
+            SMTRealValue::FuncApplication(_, args) => {
+                for arg in args {
+                    match arg {
+                        SMTBaseValue::BoolValue(bool_value) => self.bool(bool_value),
+                        SMTBaseValue::IntValue(int_value) => self.int(int_value),
+                        SMTBaseValue::RealValue(int_value) => self.real(int_value),
+                    }
+                }
+            }
         }
     }
 
@@ -1062,6 +1193,18 @@ impl Constants {
             SMTBitVecValue::BvNot(a) => {
                 self.bitvec(*a);
             }
+        }
+    }
+}
+
+struct SMTLogger;
+
+impl Logger for SMTLogger {
+    fn exec(&self, _cmd: smtlib_lowlevel::ast::Command) {}
+
+    fn response(&self, cmd: smtlib_lowlevel::ast::Command, res: &str) {
+        if env::var("SMT_DEBUG").is_ok() {
+            print!("{cmd}; {res}");
         }
     }
 }
