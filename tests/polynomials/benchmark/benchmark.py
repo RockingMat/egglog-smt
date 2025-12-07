@@ -126,7 +126,7 @@ def create_egglog_test(factored_egglog: str, expanded_egglog: str, test_type: st
 (let e2 {expanded_egglog})
 {use_smt}
 
-(run-schedule (saturate (run)))
+(run-schedule (saturate (run :until (= e1 e2))))
 (check (= e1 e2))
 """
 
